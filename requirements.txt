@@ -1,0 +1,21 @@
+# RAG + Tool Calling Agent 依赖清单（版本为 python14 环境实测锁定）
+# 安装方式：python -m pip install -r requirements.txt
+# 说明：torch 由 sentence-transformers 自动安装（如需 GPU 版请按本机 CUDA 版本另行指定源）
+
+# API 调用
+openai==3.19.2
+
+# .env 配置加载
+python-dotenv==1.2.3
+
+# 本地 Embedding（03；bge-small-zh-v1.5 模型文件经 modelscope 下载到 embedding/bge-small-zh-v1.5，不入库）
+sentence-transformers==6.2.0
+numpy==2.5.3
+modelscope==1.40.2
+
+# PDF 转 Markdown（01；基于 PyMuPDF 自带组件，无需额外下载模型）
+pymupdf4llm==0.0.27
+
+# BM25 稀疏检索（03/04；BM25 为统计算法无模型文件，IDF 在本地语料上现场构建）
+rank-bm25==0.2.2
+jieba==0.42.1

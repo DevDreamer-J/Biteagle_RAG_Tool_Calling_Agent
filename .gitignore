@@ -1,0 +1,7 @@
+# 忽略：.env（真实密钥）、__pycache__/、运行产生的轨迹日志
+.env
+__pycache__/
+data/*.jsonl
+
+# 忽略：本地 Embedding 模型（183MB 二进制，不入库，按 README 说明下载）
+embedding/

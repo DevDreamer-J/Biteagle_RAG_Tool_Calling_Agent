@@ -1,0 +1,220 @@
+{
+  "meta": {
+    "total": 20,
+    "passed": 20,
+    "pass_rate": 1.0,
+    "avg_elapsed_s": 28.07
+  },
+  "tool_call_stats": {
+    "total_calls": 42,
+    "by_tool": {
+      "knowledge_search": 36,
+      "query_pdf_files": 3,
+      "query_current_time": 3
+    },
+    "questions_using_tools": 18
+  },
+  "failures": [],
+  "details": [
+    {
+      "question": "什么是上下文窗口？长上下文可能出现什么问题？",
+      "answer": "## 什么是上下文窗口（Context Window）\n\n上下文窗口是 LLM 一次推理时能\"看到\"的 Token 总量上限，包括输入（系统提示、历史消息、检索到的文档、工具返回结果）和输出（模型生成的内容）。课程把 **Tokenization、输入 Token、输出 Token、Context Window、最大输入长度、最大输出长度** 列为 LLM 基础的关键知识点——因为模型是基于自回归的 Next Token Prediction 工作的，所有信息都必须以 Token 形式塞进这个有限窗口，超出部分模型根本\"看不见\"。【来源：# Token 与上下文窗口（关键）（行 33-42）】【来源：# 大模型基本原理（行 22-28）】\n\n理解上下文窗口是底座能力：掌握 Token、上下文窗口这些基础后，学 Prompt、RAG、Agent、Workflow 才不会停留在框架调用层。【来源：# LLM 基础（行 8-17）】\n\n## 长上下文可能出现的问题\n\n课程明确点出了两类核心风险：\n\n**1. 上下文溢出（Context Overflow）**\n输入 Token 超过最大输入长度，请求直接报错或被截断；同时输出也受最大输出长度限制，长文档场景下容易被\"腰斩\"。【来源：# Token 与上下文窗口（关键）（行 33-42）】\n\n**2. \"丢中间\"问题（Lost in the Middle）**\n即使窗口装得下，模型对上下文的注意力也不均匀：开头和结尾的信息容易被抓住，中间部分的关键事实容易被忽略，导致回答遗漏或答错。在 RAG 场景里这个问题尤其致命——检索到的相关片段往往被拼接在长上下文的中段。【来源：# Token 与上下文窗口（关键）（行 33-42）】【来源：# 生成阶段优化（行 474-480）】\n\n此外，窗口塞得越满，成本和延迟也会随 Token 数上升，噪声信息增多还会稀释有效指令。\n\n## 应对思路：上下文工程\n\n课程给出的解法不是\"尽量塞满\"，而是**在有限窗口内让模型获得正确信息**：\n\n- **上下文工程六招**：上下文选择、上下文裁剪、上下文压缩、动态注入、工具结果摘要、历史消息摘要。【来源：# 上下文工程（关键）（行 671-677）】\n- **RAG 生成阶段**：做上下文拼接与压缩、标注引用与溯源、不确定时拒绝回答，并主动规避 Lost in the Middle（例如把最重要的片段放在开头或结尾）。【来源：# 生成阶段优化（行 474-480）】\n- **检索前控制块大小**：用固定长度、递归、语义、父子分块，以及滑动窗口 + overlap，避免单块过大挤占窗口或过小丢失语义。【来源：# 分块策略（关键）（行 398-410）】\n\n一句话总结：上下文窗口决定了\"能塞多少\"，Lost in the Middle 决定了\"塞进去也不一定被用上\"，所以要靠裁剪、压缩、摘要和合理排序来做上下文工程，而不是单纯追求长窗口。",
+      "tools_used": [
+        "knowledge_search",
+        "knowledge_search"
+      ],
+      "elapsed_s": 55.03,
+      "pass": true
+    },
+    {
+      "question": "Temperature 和 Top-p 这些采样参数分别控制什么？",
+      "answer": "## 课程中的定位\n\n知识库在 **LLM 基础** 模块把「采样参数」列为必学知识点，要求掌握：\n\n> Temperature、Top-p、Top-k、Frequency Penalty、Presence Penalty、Seed、Stop Sequences，理解**确定性、创造性、重复控制和输出终止**的取舍。\n> 参考文档：https://docs.vllm.ai/en/v0.6.4/dev/sampling_params.html\n> 【来源：# —— AI应用开发工程师 比特鹰成长计划 > ## LLM 基础 > ### 采样参数（行 47-53）】\n\n它和「大模型基本原理」中的**自回归生成（Next Token Prediction）**是直接衔接的【来源：同上 > ### 大模型基本原理（行 22-28）】：模型每一步只输出**下一个 token 的概率分布**，而采样参数就是在决定\"如何从这个分布里挑一个 token\"。\n\n> 说明：知识库中该节只给出了参数清单与学习目标（确定性/创造性/重复控制/输出终止四个维度），未展开逐项定义。以下具体解释是围绕课程要求的这四个维度做的补充说明，精确数值语义建议对照上面的 vLLM 官方文档。\n\n---\n\n## 逐个参数控制什么\n\n### 1. Temperature —— 控制分布的\"陡峭程度\"（创造性 ↔ 确定性）\n- 在 softmax 之前对 logits 做缩放：`logits / T`。\n- **T → 0**：分布变得极端尖锐，几乎总是选概率最高的 token，输出稳定、可复现，适合代码生成、JSON 抽取、分类、SQL。\n- **T = 1**：保持模型原始分布。\n- **T > 1**：分布被压平，低概率 token 也有机会被选中，输出更多样、更有\"创意\"，但也更容易跑偏、产生幻觉。\n- 常用区间：确定性任务 0～0.3；通用问答 0.5～0.8；创意写作 0.9～1.2。\n\n### 2. Top-p（核采样 Nucleus Sampling）—— 控制\"候选集合的动态大小\"\n- 把 token 按概率从高到低累加，只保留**累计概率刚超过 p** 的那一小撮候选，其余全部丢弃后重新归一化再采样。\n- **p = 0.1**：只从最靠前的少数 token 里选，非常保守。\n- **p = 0.9~1.0**：候选很宽，允许长尾词出现。\n- 与 Top-k 的关键区别：**候选个数是自适应的**。分布很确定时（比如\"中华人民共和\\_\\_\"）可能只剩 1 个候选；分布很平坦时（开放话题）可能保留几百个。这比固定 k 更符合语言的不确定性。\n\n### 3. Top-k —— 控制\"候选集合的固定大小\"\n- 只保留概率最高的 k 个 token，其余置零后重新归一化。\n- k=1 等价于贪心解码（greedy）。缺点是不管分布形状如何都硬取 k 个，在分布很尖锐时会引入不必要的噪声。\n- 实践中 Top-k 与 Top-p 常**叠加使用**（先截 k 再截 p），vLLM 中两者都支持。\n\n### 4. Frequency Penalty / Presence Penalty —— 重复控制\n- **Frequency Penalty**：按某 token **已出现的次数**累加惩罚，出现越多扣得越狠 → 抑制\"车轱辘话\"、循环复读。\n- **Presence Penalty**：只要 token **出现过就罚一次**（不看次数）→ 鼓励模型**引入新话题、新词汇**，提升发散性。\n- 取值一般为 -2.0 ~ 2.0，正值抑制、负值鼓励。设太大会导致语言不通顺、刻意回避常用词。\n\n### 5. Seed —— 可复现性\n- 固定随机数种子。在模型、参数、输入完全一致时，让多次调用得到**相同输出**，便于调试、回归测试和 A/B 对比。\n- 注意：受批处理/浮点非确定性影响，某些推理引擎下即使 seed 相同也可能有细微差异。\n\n### 6. Stop Sequences —— 输出终止\n- 指定一个或多个字符串，模型生成到该处**立即停止**（该字符串本身通常不返回）。\n- 典型用途：截断多余解释、多轮对话拼接时防止模型自问自答、配合 Few-shot 示例使用、限制输出长度以省 token。\n\n### 7.（配套）max_tokens —— 长度上限\n- 严格说属于生成配置而非采样策略，但它决定了输出**最长**能到多少 token，与 Stop Sequences 一起构成\"输出终止\"的控制手段，成本预估也依赖它。\n\n---\n\n## 按课程四个维度归纳\n\n| 维度 | 主要参数 | 调节方向 |\n|---|---|---|\n| **确定性** | Temperature、Seed、Top-k=1 | 低 T + 固定 seed → 稳定可复现 |\n| **创造性** | Temperature、Top-p、Presence Penalty | 高 T + 高 p + 正 presence → 多样发散 |\n| **重复控制** | Frequency Penalty、Presence Penalty、Top-p | 正 frequency penalty 抑制复读 |\n| **输出终止** | Stop Sequences、max_tokens | 精确截断，省 token、便于解析 |\n\n---\n\n## 实战建议（对应课程\"取舍\"要求）\n\n1. **不要同时大幅调 Temperature 和 Top-p**——两者都在改变分布形状，一起动很难判断是哪个生效。一般固定一个、微调另一个。\n2. **RAG 场景要压低随机性**：知识库在「生成阶段优化」中要求\"控制模型只基于检索内容回答\"\"不确定时拒绝回答\"【来源：同上 > ## RAG > ### 生成阶段优化（行 474-480）】，因此 RAG 生成阶段通常用 `temperature=0~0.3`，避免模型自由发挥造成幻觉。\n3. **Function Calling / 结构化输出必须低温**：模型要输出符合 Schema 的 JSON【来源：同上 > ### Function Calling / Tool Use（行 134-143）】，高 temperature 极易产生格式错误，建议 `temperature=0`，并配合 Stop Sequences 或 `response_format`。\n4. **区分\"检索的 Top-K\"和\"采样的 Top-k\"**：知识库 RAG 模块里的 Top-K 指的是**召回多少条向量结果**【来源：同上 > ### Embedding 与向量检索（关键）（行 415-422）】，与采样的 Top-k 是完全不同的概念，初学者最容易混淆，建议单独记一条笔记。\n\n如果你需要，我可以再帮你整理一份「不同业务场景（客服问答 / 代码生成 / 文案创作 / RAG 抽取）的采样参数推荐配置表」。",
+      "tools_used": [
+        "knowledge_search",
+        "knowledge_search"
+      ],
+      "elapsed_s": 47.82,
+      "pass": true
+    },
+    {
+      "question": "在 Function Calling 中，模型和业务系统各自负责什么？",
+      "answer": "## 一句话结论\n\n**模型只生成\"工具调用意图\"，真正执行工具的是业务系统。**【来源：# LLM 基础 > ### Function Calling / Tool Use（关键）（行 134-143）】\n\n这是 Function Calling 最容易被误解的地方——模型并不会去调你的接口、查你的数据库，它只是\"说\"它想调什么、传什么参数。\n\n## 职责划分\n\n| 阶段 | 模型负责 | 业务系统负责 |\n|---|---|---|\n| 工具定义 | 读懂你给的**工具描述**和**参数 Schema** | 编写清晰的工具描述与参数 Schema |\n| 决策 | 判断本轮是否需要调工具、调哪个、生成参数 | 无（模型决策） |\n| 执行 | 不执行任何实际操作 | **真正执行工具**，拿到结果 |\n| 回传 | 基于返回结果继续生成自然语言 | 按 **tool_call_id** 对应关系，把 **tool result** 回填给模型 |\n| 异常 | 根据错误信息决定重试/换工具/告知用户 | 处理**工具错误返回**，把错误也规范地回传 |\n| 并发 | 一次可能发起多个调用（**并行工具调用**） | 并行执行并用 tool_call_id 正确配对每个结果 |\n\n课程中明确要求你需要理解的六个关键概念就是：**工具描述、参数 Schema、tool_call_id、tool result、并行工具调用、工具错误返回**【来源：# LLM 基础 > ### Function Calling / Tool Use（关键）（行 134-143）】。\n\n## 学习要求\n\n在「大模型 API Playground」实战项目中，这项能力是必做项之一，验收标准包括：\n\n- 能清楚解释 **message、role、tool call、tool result、stream、usage** 的含义\n- 能演示**一次完整工具调用链路**【来源：# LLM 基础 > ### 项目实战：大模型 API Playground（行 180-253）】\n\n所谓\"完整链路\"，就是：用户提问 → 模型返回 tool_call（含 id + 参数）→ 业务系统执行 → 带 tool_call_id 回传 tool result → 模型生成最终回答。\n\n## 延伸阅读（课程给出的官方文档）\n\n- OpenAI：https://platform.openai.com/docs/guides/function-calling\n- Anthropic：https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview\n\n【来源：# LLM 基础 > ### Function Calling / Tool Use（关键）（行 134-143）】\n\n> 补充一点上下文：Function Calling 是 LLM 基础层的能力，而 Agent 应用则是在此之上把 Prompt、RAG、工具调用、工作流、状态管理、记忆、评估与安全组合成可靠系统【来源：# Agent 应用（行 566-572）】。所以这里把\"意图生成\"和\"实际执行\"的边界搞清楚，后面做 Agent 才不会混乱。",
+      "tools_used": [
+        "knowledge_search",
+        "knowledge_search"
+      ],
+      "elapsed_s": 26.0,
+      "pass": true
+    },
+    {
+      "question": "一个完整的提示词应该包含哪些结构要素？",
+      "answer": "## 一个完整提示词的六大结构要素\n\n根据比特鹰成长计划中 Prompt Engineering 章节，「提示词结构（关键）」明确列出了六个要素：**角色设定（Role/System Prompt）、任务描述（Instruction）、上下文（Context）、输入数据（Input）、输出格式（Output Format）、约束条件（Constraints）**。【来源：# —— AI应用开发工程师 比特鹰成长计划 > ## Prompt Engineering > ### 提示词结构（关键）（行 273-282）】\n\n下面逐个说明它们各自解决什么问题：\n\n| 要素 | 作用 | 说明 |\n|---|---|---|\n| 角色设定 Role / System Prompt | 定\"人设\"与专业视角 | 决定模型的语气、知识边界、立场 |\n| 任务描述 Instruction | 定\"做什么\" | 一个提示词尽量只承载一个明确任务 |\n| 上下文 Context | 定\"背景\" | 业务背景、已知信息、参考资料（RAG 检索结果通常注入这里） |\n| 输入数据 Input | 定\"处理对象\" | 用户实际提交的内容，需与指令区隔明显 |\n| 输出格式 Output Format | 定\"长什么样\" | 字段、顺序、Markdown/JSON 等 |\n| 约束条件 Constraints | 定\"不能做什么\" | 禁止编造、字数限制、不确定时如何回答 |\n\n> 课程对这一模块的定位是：学 Prompt「不只是学习'怎么问'，而是学习如何组织任务、上下文、约束、示例和输出格式，让模型在复杂场景下稳定地产生可用结果」。【来源：# —— AI应用开发工程师 比特鹰成长计划 > ## Prompt Engineering（行 259-268）】\n\n---\n\n## 两个常被遗漏的\"第七要素\"\n\n**1. 示例（Examples / Few-shot）**\n课程把 Zero-shot 与 Few-shot 单列一节：Zero-shot 是无示例直接完成任务，Few-shot 是「通过少量示例约束模型输出格式、判断标准和表达风格」。【来源：# ## Prompt Engineering > ### Zero-shot / Few-shot（行 287-293）】当输出格式复杂或判断标准主观时，给 2–3 个示例往往比写一大段规则更有效。\n\n**2. 结构化输出的技术兜底**\n光靠文字描述输出格式并不够，还应结合 **JSON Mode、JSON Schema、Structured Outputs、字段约束、枚举、嵌套对象，以及结构化输出失败后的修复策略**。【来源：# ## LLM 基础 > ### 结构化输出（关键）（行 117-129）】\n\n---\n\n## 可直接套用的模板骨架\n\n```text\n# Role（角色设定）\n你是一名 ______，具备 ______ 经验。\n\n# Context（上下文）\n业务背景：______\n参考资料：______\n\n# Instruction（任务描述）\n请完成：______\n步骤要求：1. ______ 2. ______\n\n# Input（输入数据）\n<user_input>\n{{待处理内容}}\n</user_input>\n\n# Examples（Few-shot 示例，可选）\n输入：______ → 输出：______\n\n# Output Format（输出格式）\n以 JSON 输出，字段：{\"result\": str, \"confidence\": enum[high|mid|low]}\n\n# Constraints（约束条件）\n- 不得编造未在 Context 中出现的事实\n- 信息不足时返回 {\"need_more_info\": true}\n- 字数不超过 ______\n```\n\n---\n\n## 学习建议：如何验证你真的掌握了\n\nPrompt Engineering 不单独设项目实战，而是要在后续每个项目的 README 中说明：**使用了哪些 Prompt 结构、为什么这样设计 System Prompt 和约束条件、是否使用 Few-shot 示例、如何控制输出格式、如何处理模型不确定/越界回答/格式错误，并至少记录 3 个 Prompt 修改前后的效果对比**。【来源：# ## Prompt Engineering > ### 实践要求（行 328-367）】\n\n⚠️ 补充提醒：写长上下文时注意 **Token 与 Context Window 限制，以及长上下文的\"丢中间\"（Lost in the Middle）问题**——关键指令放在开头或结尾更稳。【来源：# ## LLM 基础 > ### Token 与上下文窗口（关键）（行 33-42）】\n\n需要我针对你的某个具体场景（比如 RAG 问答、代码审查、内容生成）写一版完整的提示词吗？",
+      "tools_used": [
+        "knowledge_search",
+        "knowledge_search",
+        "knowledge_search",
+        "knowledge_search"
+      ],
+      "elapsed_s": 39.62,
+      "pass": true
+    },
+    {
+      "question": "Zero-shot 和 Few-shot 有什么区别？",
+      "answer": "## Zero-shot 与 Few-shot 的区别\n\n课程资料中给出的核心定义是：\n\n> **Zero-shot 是无示例直接完成任务，Few-shot 是通过少量示例约束模型输出格式、判断标准和表达风格。**\n> 【来源：Prompt Engineering — Zero-shot / Few-shot（行 287-293）】\n\n### 对比表\n\n| 维度 | Zero-shot | Few-shot |\n|---|---|---|\n| 是否给示例 | ❌ 不给，直接描述任务 | ✅ 给少量输入→输出示例（通常 1~5 个） |\n| 主要作用 | 快速验证模型本身能力 | **约束输出格式、判断标准、表达风格** |\n| 输出稳定性 | 较低，模型自由发挥空间大 | 较高，示例起到\"模板/锚点\"作用 |\n| Token 成本 | 低 | 高（示例会占用上下文长度） |\n| 适用场景 | 通用问答、开放式任务、任务简单明确 | 分类打标、结构化抽取、语气/风格统一、评分标准对齐 |\n\n### 背后的原理\n\nFew-shot 之所以有效，是因为大模型具备 **上下文学习（In-Context Learning）** 能力——模型不需要重新训练，就能从 Prompt 中给出的示例里\"就地学会\"任务规律。这也是 LLM 基础阶段要求掌握的知识点之一【来源：LLM 基础 — 大模型基本原理（行 22-28）】。\n\n### 学习与实践要求\n\n课程把这两者放在 **Prompt Engineering** 模块下。该模块的定位是：\n\n> 学习 Prompt 不只是学习\"怎么问\"，而是学习如何组织任务、上下文、约束、示例和输出格式，让模型在复杂场景下稳定地产生可用结果。【来源：Prompt Engineering（行 259-268）】\n\n注意实践层面的要求：Prompt Engineering **不单独设置项目实战**，而是需要在后续每个项目的 README 中体现，其中明确列出了一条 **\"是否使用 Few-shot 示例\"**，同时还要说明使用了哪些 Prompt 结构、System Prompt 的设计理由、如何控制输出格式、如何处理模型不确定或格式错误，并记录至少 3 个 Prompt 修改前后的效果对比【来源：Prompt Engineering — 实践要求（行 328-367）】。\n\n### 延伸资料\n\n课程给出的参考链接：https://www.promptingguide.ai/zh/techniques/fewshot 【来源：Prompt Engineering — Zero-shot / Few-shot（行 287-293）】\n\n---\n\n**一句话总结**：Zero-shot 靠\"说清楚任务\"，Few-shot 靠\"给几个样板\"；当模型输出格式漂移、判断标准不一致、风格不统一时，加示例通常比反复改指令更有效。",
+      "tools_used": [
+        "knowledge_search",
+        "knowledge_search"
+      ],
+      "elapsed_s": 19.42,
+      "pass": true
+    },
+    {
+      "question": "什么是 ReAct 范式？它和 Agent 工具调用有什么关系？",
+      "answer": "## 一、ReAct 是什么\n\nReAct = **Reasoning + Acting（推理 + 行动）**。知识库的定义是：\n\n> 让模型在推理过程中决定是否调用工具、观察工具结果，再继续完成任务，是 **Agent 工具调用的基础范式**。\n> 【来源：# Prompt Engineering > ReAct（行 306-315）】\n\n也就是说，模型不是\"一次性输出答案\"，而是走一个**循环**：\n\n```\n思考（我该做什么/缺什么信息）\n  → 决定行动（调用哪个工具、传什么参数）\n  → 观察结果（工具返回了什么）\n  → 再思考（够了吗？不够就继续调工具）\n  → 最终回答\n```\n\n它属于 **Prompt Engineering** 的高级技巧，参考链接：https://www.promptingguide.ai/zh/techniques/react 【来源：# Prompt Engineering > ReAct（行 306-315）】\n\n---\n\n## 二、ReAct 与 Agent 工具调用的关系\n\n### 1. ReAct 是\"决策模式\"，Function Calling 是\"执行接口\"\n\n知识库特别强调了一个关键点：\n\n> **模型只是生成工具调用意图，真正执行工具的是业务系统**；需要理解工具描述、参数 Schema、`tool_call_id`、tool result、并行工具调用和工具错误返回。\n> 【来源：# LLM 基础 > Function Calling / Tool Use（关键）（行 134-143）】\n\n所以两者的分工是：\n\n| 层次 | 负责什么 | 对应知识点 |\n|---|---|---|\n| **ReAct 范式** | 什么时候该调工具、调完怎么继续推理（大脑的思考节奏） | Prompt Engineering |\n| **Function Calling / Tool Use** | 用什么协议表达\"我要调这个工具、参数是这些\"（手脚的接口） | LLM 基础 |\n| **工具调用设计** | 工具描述、参数 Schema、工具选择、结果格式、错误返回、并行调用、超时与重试 | Agent 应用 |\n\n第三行来自：【来源：# Agent 应用 > 工具调用设计（关键）（行 601-607）】\n\n### 2. 为什么说 ReAct 是\"基础范式\"\n\n因为 Agent 的本质区别就在于**动态决策**：\n\n> 理解 Agent、Chatbot、Workflow 的边界：Chatbot 偏对话，Workflow 偏确定流程，**Agent 偏动态决策和工具调用**。\n> 【来源：# Agent 应用 > Agent 基本概念（行 577-585）】\n\nWorkflow 是提前写死\"第一步查数据库、第二步调 API\"；而 Agent 是运行时由模型自己判断要不要调、调哪个、调几次——这个\"边想边做\"的能力，正是 ReAct 提供的。\n\n> Agent 应用是在 LLM 基础之上构建**可执行、可检索、可调用工具、可管理上下文**的 AI 系统。\n> 【来源：# Agent 应用（行 566-572）】\n\n---\n\n## 三、怎么在实践中验证你掌握了（课程要求）\n\n知识库里有两个直接相关的验收点：\n\n**① LLM 基础项目实战：大模型 API Playground（行 180-253）**\n- 要求支持 Function Calling / Tool Use\n- 验收：能清楚解释 message、role、**tool call、tool result**、stream、usage 的含义；能演示一次完整工具调用链路\n【来源：# LLM 基础 > 项目实战：大模型 API Playground（行 180-253）】\n\n**② RAG 项目实战：RAG + Tool Calling Agent（行 507-561）**\n- 至少实现 2 个工具（网页搜索、计算器、文件查询、时间查询）\n- **Agent 能根据问题决定是否检索、是否调用工具** ← 这就是 ReAct 的落地\n- **记录 Agent 每一步的 reasoning 摘要、工具调用和最终结果** ← 这就是把 Thought / Action / Observation 打印出来\n- 验收：能解释**工具调用和普通函数调用的区别**\n【来源：# RAG > 项目实战：RAG + Tool Calling Agent（行 507-561）】\n\n---\n\n## 四、一句话总结\n\n**ReAct 决定了 Agent\"如何思考着去用工具\"，Function Calling 决定了\"工具怎么被规范化地调用\"，而工具调用设计（Schema、错误处理、重试、并行）决定了这套循环在真实工程里可不可靠。** 三者串起来，才是课程说的\"不停留在框架调用层\"【来源：# LLM 基础（行 8-17）】。\n\n如果你想动手，建议按顺序：先在 Playground 里跑通一次完整 tool call 链路 → 再在 RAG Agent 里打印每一步 reasoning/工具调用/结果 → 最后补上工具超时、重试和错误返回。需要我帮你梳理某一个环节的具体实现步骤吗？",
+      "tools_used": [
+        "knowledge_search",
+        "knowledge_search",
+        "knowledge_search",
+        "knowledge_search"
+      ],
+      "elapsed_s": 46.33,
+      "pass": true
+    },
+    {
+      "question": "RAG 中有哪些常见的文档分块策略？",
+      "answer": "## 课程中列出的六种分块策略\n\n知识库在 RAG 模块的「分块策略（关键）」知识点中，明确列出了以下六类常见策略：【来源：# RAG > 分块策略（关键）（行 398-410）】\n\n| # | 策略 | 核心思路（补充说明） |\n|---|------|---------------------|\n| 1 | **固定长度分块** | 按固定 token / 字符数硬切，实现最简单，但容易切断句子和语义 |\n| 2 | **递归分块** | 按分隔符优先级递归切分（段落 → 句子 → 词），是 LangChain 的默认做法，兼顾长度与语义完整性 |\n| 3 | **语义分块** | 用 Embedding 计算相邻句子的语义相似度，在\"语义断点\"处切分，块内主题更聚焦 |\n| 4 | **基于 Markdown / Code 结构分块** | 利用文档天然结构（标题层级、函数/类定义）切分，保留层级元数据 |\n| 5 | **父子分块（Parent-Child / Small-to-Big）** | 用小块做检索匹配，命中后返回其所属的大块（父块）给模型，兼顾召回精度与上下文完整性 |\n| 6 | **滑动窗口与 overlap** | 相邻块之间保留一定重叠内容，避免关键信息正好落在切割边界上而丢失 |\n\n> 表格中第 2、3、5 项的实现细节属于通用工程常识补充，课程原文只列出了策略名称。\n\n---\n\n## 为什么分块被标注为「关键」\n\n课程特别强调，学 RAG 的重点**不是「向量库 + 大模型」这么简单**，而是要理解完整链路：\n\n> 文档处理 → 索引 → 召回 → 重排 → 上下文拼接 → 引用溯源 → 效果评估\n\n【来源：# RAG（行 372-382）】\n\n分块处于链路最前端，直接决定了后续 Embedding 质量、召回精度和最终回答质量——**分块错了，后面再强的重排和模型也救不回来**。\n\n---\n\n## 课程推荐的延伸资料\n\n同一条目给出了两个官方参考链接：【来源：# RAG > 分块策略（关键）（行 398-410）】\n\n- Pinecone《Chunking Strategies》：https://www.pinecone.io/learn/chunking-strategies/\n- LlamaIndex Node Parsers 文档：https://docs.llamaindex.ai/en/stable/module_guides/loading/node_parsers/\n\n---\n\n## 实战中怎么落地\n\n在 RAG 模块的项目实战「RAG + Tool Calling Agent」中，分块是必做环节，具体要求包括：【来源：# RAG > 项目实战：RAG + Tool Calling Agent（行 507-561）】\n\n- 支持上传或导入 Markdown / PDF 文档\n- 实现**文档切分**、Embedding、向量检索\n- 支持引用来源，不确定时拒绝回答\n- 准备不少于 20 条测试问题用于评估效果\n- 验收时要能提供**检索效果、回答质量和失败 case 分析**\n\n建议你在实战里对同一批文档分别试 2-3 种分块策略（比如固定长度 vs 递归 vs 父子分块），用那 20 条测试问题横向对比召回命中率——这正是验收标准中\"失败 case 分析\"最有说服力的素材。\n\n如果你想进一步了解召回、重排或 Advanced RAG（Query Rewrite、HyDE、GraphRAG）部分，我可以继续帮你检索。",
+      "tools_used": [
+        "knowledge_search",
+        "knowledge_search"
+      ],
+      "elapsed_s": 30.63,
+      "pass": true
+    },
+    {
+      "question": "什么是混合检索？多路召回为什么能提升召回覆盖率？",
+      "answer": "## 一、什么是混合检索（Hybrid Search）\n\n知识库中对这一节的定位是：**「关键词检索、向量检索、BM25、Hybrid Search、RRF 融合、多查询改写，用于提升召回覆盖率。」**【来源：# —— AI应用开发工程师 比特鹰成长计划 > RAG > 混合检索与多路召回（行 449-458）】\n\n也就是说，混合检索不是单一的检索算法，而是把**两类互补的检索范式组合起来**：\n\n| 检索方式 | 匹配依据 | 擅长 | 短板 |\n|---|---|---|---|\n| **关键词 / BM25**（稀疏检索） | 字面词形、词频、逆文档频率 | 专有名词、型号、错误码、人名、代码符号、精确术语 | 同义/换种说法就召回不到 |\n| **向量检索**（稠密检索） | Embedding 语义相似度（Cosine / Dot / L2） | 同义改写、口语化提问、跨语言、概念性匹配 | 对罕见精确 token（如 `ERR-4032`）不敏感，容易\"语义漂移\" |\n\n**融合手段**是混合检索的核心：\n- **RRF（Reciprocal Rank Fusion）**：只看各路结果中的**排名**而非原始分数，用 `score = Σ 1/(k + rank_i)` 归并，天然规避了\"BM25 分数与余弦相似度量纲不可比\"的问题。\n- **加权融合**：对稀疏分和稠密分先归一化再加权求和，需要调参。\n- **多查询改写（Multi-Query）**：让 LLM 把原始问题改写成多个不同表述/子问题，各自检索后再合并，本质是从**查询侧**扩大召回面。\n\n配套的下游环节是 **Rerank 重排序**：Cross-Encoder、Bi-Encoder、bge-reranker、Cohere/Jina Rerank，形成**「粗排 + 精排」二阶段检索架构**【来源：# RAG > Rerank 重排序（关键）（行 463-469）】。典型链路是：多路召回各取 Top-50 → RRF 融合去重 → Rerank 精排 → 取 Top-5 拼进 Prompt。\n\n---\n\n## 二、多路召回为什么能提升召回覆盖率\n\n本质原因是：**每一路检索器的\"漏召集合\"是不同的，并集大于任一单集。**\n\n1. **失效模式互补，而非叠加**\n   向量检索漏掉的精确术语，BM25 能捞回来；BM25 漏掉的同义改写，向量检索能捞回来。两路的错误相关性低，所以合并后**漏检概率显著下降**。\n\n2. **扩大候选池 = 提高\"正确答案在池子里\"的概率**\n   召回率（Recall）的上限由候选池决定。Rerank 只能在已召回的集合里排序，**它救不了没被召回的文档**。所以先靠多路把池子做大做全，再靠精排提准确率——这正是\"粗排 + 精排\"二阶段设计的逻辑【来源：# RAG > Rerank 重排序（关键）（行 463-469）】。\n\n3. **多查询改写覆盖\"问题空间的多个面\"**\n   一个复杂问题往往包含多个子意图。改写出的多个 query 分别命中不同 chunk，避免了单一 query 向量\"平均化\"导致哪个意图都不够突出的问题。\n\n4. **对切分与 Embedding 的脆弱性做冗余容错**\n   文档切分边界不当、Embedding 模型领域适配差，都会造成单路检索系统性失效。多路相当于提供了**冗余备份**，降低单一环节故障的影响。\n\n---\n\n## 三、怎么验证它真的提升了\n\n课程强调这一步不能省：**「评估检索准确率、召回率、答案忠实度、上下文相关性、幻觉率，使用测试集持续验证 RAG 效果」**【来源：# RAG > RAG 评估（关键）（行 485-491）】，工具可用 RAGAS。\n\n在项目实战《RAG + Tool Calling Agent》中也有对应的验收要求：**准备不少于 20 条测试问题用于评估效果**，并能**提供检索效果、回答质量和失败 case 分析**【来源：# RAG > 项目实战：RAG + Tool Calling Agent（行 507-561）】。\n\n> 实践建议：构造测试集时，刻意包含三类问题——① 含精确术语/编号的；② 用同义改写、口语化提问的；③ 跨多个 chunk 的复合问题。分别对比\"纯向量\"\"纯 BM25\"\"混合+RRF\"三组的召回率，提升会非常直观。\n\n延伸阅读：课程给出的官方参考链接 https://www.pinecone.io/learn/hybrid-search/ 【来源：# RAG > 混合检索与多路召回（行 449-458）】",
+      "tools_used": [
+        "knowledge_search",
+        "knowledge_search"
+      ],
+      "elapsed_s": 33.72,
+      "pass": true
+    },
+    {
+      "question": "RAG 效果评估需要关注哪些指标？",
+      "answer": "## RAG 效果评估的核心指标\n\n根据课程资料，RAG 评估是**关键环节**，需要重点关注以下五个指标【来源：# RAG > ### RAG 评估（关键）（行 485-491）】：\n\n### 一、检索质量类指标（评估\"找得准不准\"）\n| 指标 | 含义 |\n|---|---|\n| **检索准确率**（Precision） | 召回的文档片段中，真正与问题相关的比例 |\n| **召回率**（Recall） | 所有应该被找到的相关内容中，实际被检索到的比例 |\n| **上下文相关性** | 拼接进 Prompt 的上下文是否与用户问题匹配、是否包含噪声 |\n\n### 二、生成质量类指标（评估\"答得对不对\"）\n| 指标 | 含义 |\n|---|---|\n| **答案忠实度**（Faithfulness） | 回答是否严格基于检索到的上下文，而非模型自行编造 |\n| **幻觉率** | 输出中出现无依据、事实错误内容的比例 |\n\n### 三、评估方法：测试集持续验证\n资料特别强调要**使用测试集持续验证 RAG 效果**【来源：# RAG > ### RAG 评估（关键）（行 485-491）】，并给出了评估工具 **RAGAS**（https://docs.ragas.io/）。\n\n### 四、项目实战中的落地要求\n在「RAG + Tool Calling Agent」项目中，评估要求被具体化为【来源：# 项目实战：RAG + Tool Calling Agent（行 507-561）】：\n- **准备不少于 20 条测试问题**用于评估效果\n- 验收标准中需提供 **检索效果、回答质量和失败 case 分析**\n- 记录 Agent 每一步的 reasoning 摘要、工具调用和最终结果（便于定位问题环节）\n- 支持**引用来源**和**不确定时拒绝回答**（降低幻觉的工程手段）\n\n### 五、评估要放在完整链路中看\n学习 RAG 的重点不是\"向量库 + 大模型\"这么简单，而是要理解**文档处理 → 索引 → 召回 → 重排 → 上下文拼接 → 引用溯源 → 效果评估**的完整链路【来源：# RAG（行 372-382）】。因此当指标不达标时，应逐环节归因：\n- 召回率低 → 检查切分策略、Embedding 模型，或引入**混合检索/多路召回**（BM25、Hybrid Search、RRF 融合、多查询改写）来提升召回覆盖率【来源：# RAG > ### 混合检索与多路召回（行 449-458）】\n- 准确率低/上下文噪声大 → 考虑增加重排（Rerank）\n- 忠实度低、幻觉率高 → 检查 Prompt 约束与引用溯源机制\n\n**一句话总结**：RAG 评估 = 检索侧（准确率、召回率、上下文相关性）+ 生成侧（答案忠实度、幻觉率），配合固定测试集持续跑分，并对失败 case 做链路归因。",
+      "tools_used": [
+        "knowledge_search",
+        "knowledge_search"
+      ],
+      "elapsed_s": 21.07,
+      "pass": true
+    },
+    {
+      "question": "Agent、Chatbot 和 Workflow 三者有什么区别？",
+      "answer": "## 三者的边界（课程原文）\n\n课程在「Agent 基本概念」一节给出了一句话的核心划分：\n\n> **Chatbot 偏对话，Workflow 偏确定流程，Agent 偏动态决策和工具调用。**\n> 【来源：# Agent 基本概念（行 577-585）】\n\n下面结合课程其他章节展开对比：\n\n| 维度 | Chatbot | Workflow | Agent |\n|---|---|---|---|\n| 核心定位 | 偏对话，多轮问答 | 偏确定流程，步骤预先编排 | 偏动态决策 + 工具调用 |\n| 控制路径由谁决定 | 模型按对话上下文续写 | **开发者**预先写死的流程结构 | **模型**在运行时自行决定下一步 |\n| 是否调用外部工具 | 一般不调用 | 在固定节点调用 | 由模型判断是否需要调用、调用哪个 |\n| 可预测性 | 中 | 高（可控性最好） | 相对低，需要评估与安全兜底 |\n| 典型模式 | 单模型 + System Prompt + 上下文 | Prompt Chaining、Routing、Parallelization、Orchestrator-Workers、Evaluator-Optimizer | ReAct 循环：推理 → 调用工具 → 观察结果 → 再推理 |\n\n【来源：# Agent 基本概念（行 577-585）】【来源：# Workflow 模式（行 612-618）】【来源：# ReAct（行 306-315）】\n\n---\n\n## 逐个说明\n\n**1. Chatbot —— 偏对话**\n本质是「模型 + 提示词 + 多轮上下文」，目标是根据用户输入生成回复，不主动改变外部世界，也不自己决定要不要查资料、要不要算数。\n\n**2. Workflow —— 偏确定流程**\n执行路径由开发者事先设计好，模型只在每个节点里完成被指派的那一小步。课程列举了五种常见编排模式：**Prompt Chaining（链式）、Routing（路由分发）、Parallelization（并行）、Orchestrator-Workers（编排者-执行者）、Evaluator-Optimizer（评估-优化）**，并特别强调一句方法论：\n\n> **理解可控流程优先于盲目 Agent 化。**\n> 【来源：# Workflow 模式（行 612-618）】\n\n也就是说：能用确定流程解决的，就别急着上 Agent。\n\n**3. Agent —— 偏动态决策和工具调用**\nAgent 是在 LLM 基础上构建的「**可执行、可检索、可调用工具、可管理上下文**的 AI 系统」，重点不是绑定某个框架，而是把 **Prompt、RAG、工具调用、工作流、状态管理、记忆、评估与安全**这些能力组合成可靠的系统。【来源：# Agent 应用（行 566-572）】\n\n它的底层范式是 **ReAct（Reasoning + Acting）**：让模型在推理过程中决定是否调用工具、观察工具结果，再继续完成任务。【来源：# ReAct（行 306-315）】\n\n---\n\n## 一个直观的例子（对应课程实战项目）\n\n在「RAG + Tool Calling Agent」实战中，课程明确要求做到：\n\n- 支持上传 Markdown / PDF，实现文档切分、Embedding、向量检索\n- 至少实现 2 个工具（网页搜索、计算器、文件查询、时间查询）\n- **Agent 能根据问题决定是否检索、是否调用工具**\n- 记录 Agent 每一步的 reasoning 摘要、工具调用和最终结果\n- 支持引用来源，不确定时拒绝回答\n\n【来源：# 项目实战：RAG + Tool Calling Agent（行 507-561）】\n\n同样是「回答用户问题」：\n- **Chatbot 版**：直接用模型已有知识答，可能胡说；\n- **Workflow 版**：固定「先检索 → 再拼 Prompt → 再回答」，每次都检索，哪怕用户只是问「你好」；\n- **Agent 版**：模型自己判断——闲聊就直接答，需要事实就去检索，需要算数就调计算器，还会记录推理过程。\n\n这正对应了课程验收标准里的两点：**能解释 RAG 的完整链路**、**能解释工具调用和普通函数调用的区别**。【来源：# 项目实战：RAG + Tool Calling Agent（行 507-561）】\n\n---\n\n## 学习建议\n\n三者不是互斥的「技术选型三选一」，而是能力叠加：Agent 内部往往就包含若干 Workflow，Workflow 的每个节点可能就是一个 Chatbot 式的模型调用。课程的路线也是层层递进的——先打通 **LLM 基础**，因为「掌握这些基础后，学习 Prompt、RAG、Agent、Workflow 才不会停留在框架调用层」。【来源：# LLM 基础（行 8-17）】\n\n延伸阅读（课程给出的两篇原文）：\n- Anthropic《Building Effective Agents》：https://www.anthropic.com/engineering/building-effective-agents\n- AI Agent 白皮书（中文）：https://arthurchiao.art/blog/ai-agent-white-paper-zh/",
+      "tools_used": [
+        "knowledge_search",
+        "knowledge_search",
+        "knowledge_search",
+        "knowledge_search"
+      ],
+      "elapsed_s": 40.44,
+      "pass": true
+    },
+    {
+      "question": "MCP（Model Context Protocol）是什么？它解决什么问题？",
+      "answer": "## MCP 是什么\n\n根据比特鹰成长计划的课程大纲，MCP 是 **Agent 应用**模块下的一个知识点：\n\n> 理解 Model Context Protocol 的 **Server / Client / Tools / Resources / Prompts** 架构，以及它如何**标准化模型与外部工具、数据源的连接方式**。\n> 【来源：# —— AI应用开发工程师 比特鹰成长计划 > ## Agent 应用 > ### MCP（行 682-688）】\n\n用通俗的话说（以下为通用背景补充，非知识库原文）：MCP 是一个**开放协议**，规定了「AI 应用（Host/Client）」与「外部能力提供方（Server）」之间怎么发现能力、怎么传参、怎么返回结果。它的定位常被类比为 **\"AI 应用的 USB-C 接口\"**——插上就能用，不必为每个设备单独定制。\n\n## 它解决什么问题\n\n**1. M×N 的集成爆炸问题**\n在 MCP 之前，N 个 Agent 应用要接 M 个外部系统（数据库、GitHub、飞书、内部 API……），就得写 N×M 套适配代码。有了统一协议，工具方只需实现一次 Server，应用方只需实现一次 Client，复杂度降到 **N+M**。\n\n**2. 工具接入方式碎片化**\n各家框架（LangChain、LlamaIndex、各家 Agent 平台）的 Tool 定义格式互不通用，换一个框架就要重写工具封装。MCP 把 Tool 的 schema 描述、调用、结果返回标准化了。\n\n**3. 不只是\"工具\"，还有\"数据\"和\"提示词\"**\n这是 MCP 比单纯 Function Calling 更宽的地方，它的三类核心能力是：\n- **Tools**：可被模型调用的动作（查天气、下单、执行 SQL）\n- **Resources**：可被读取的上下文数据源（文件、文档、数据库记录）\n- **Prompts**：可复用的提示词模板 / 工作流预设\n\n**4. 生态复用**\n一个写好的 MCP Server 可以被 Claude Desktop、Cursor、各类 Agent 框架直接挂载，不必重复造轮子。\n\n## 与课程中其他知识点的关系\n\nMCP 不是孤立的，建议按这条线串起来学：\n\n| 前置知识 | 关系 |\n|---|---|\n| Function Calling / Tool Use | MCP 的底层机制基础，需先能解释 `tool call`、`tool result` 【来源：项目实战：大模型 API Playground（行 180-253）】 |\n| ReAct | \"推理→决定是否调用工具→观察结果→继续\"，是 Agent 工具调用的基础范式 【来源：Prompt Engineering > ReAct（行 306-315）】 |\n| Agent 基本概念 | Agent 偏**动态决策和工具调用**，MCP 正是给它供给工具的标准通道 【来源：Agent 基本概念（行 577-585）】 |\n| RAG + Tool Calling Agent 实战 | 项目要求至少实现 2 个工具，并验收\"能解释工具调用和普通函数调用的区别\"——用 MCP 来实现是个很好的加分项 【来源：项目实战：RAG + Tool Calling Agent（行 507-561）】 |\n\n课程整体强调：Agent 应用的学习重点**不是绑定某个框架**，而是理解 Prompt、RAG、工具调用、工作流、状态管理、记忆、评估与安全这些核心能力如何组合成可靠的 AI 系统 【来源：Agent 应用（行 566-572）】。所以学 MCP 时，重点应放在**协议设计思路和架构分层**上，而不是某个 SDK 的 API 细节。\n\n## 官方资料\n\n课程给出的参考链接：https://modelcontextprotocol.io/docs/getting-started/intro 【来源：MCP（行 682-688）】\n\n需要我帮你查一下 Agent 应用模块的完整学习清单，或者相关的实战项目要求吗？",
+      "tools_used": [
+        "knowledge_search",
+        "knowledge_search",
+        "knowledge_search",
+        "knowledge_search"
+      ],
+      "elapsed_s": 39.2,
+      "pass": true
+    },
+    {
+      "question": "Redis 在 AI 后端系统中有哪些常见用途？",
+      "answer": "## 核心结论（课程原文）\n\n课程对 Redis 的定位很明确：**Redis 是高性能内存数据库，常用于缓存、限流、分布式锁、会话状态、任务状态和轻量消息流。**【来源：# 后端工程 > ### Redis（行 842-854）】\n\n需要掌握的能力清单：**String、Hash、Set、ZSet、Stream、TTL、Pipeline、Lua、Pub/Sub、RedisJSON 和 Vector Search**。【来源：# 后端工程 > ### Redis（行 842-854）】\n\n## 对应到 AI 后端的具体用途\n\n下面把课程列的六类用途，结合 AI 场景做落地映射（数据结构对应关系为通用工程实践，用途分类以课程为准）：\n\n| 用途 | AI 后端典型场景 | 常用结构 |\n|---|---|---|\n| **缓存** | LLM 响应缓存、Embedding **向量缓存**（课程在 RAG 与 LLM 基础章节都把\"向量缓存\"列为关键点）、Prompt 模板、检索结果复用 | String / Hash + TTL |\n| **限流** | 按用户/API Key 限制大模型调用频次与 Token 配额，防止打爆第三方 API 费用 | String 计数 / ZSet 滑动窗口 / Lua |\n| **分布式锁** | 同一会话并发写入保护、向量库重建任务防重入、定时任务单实例执行 | String(SET NX) / Lua |\n| **会话状态** | 多轮对话历史、短期记忆——课程强调\"大模型 API 调用通常是无状态的，需要业务侧维护历史消息、摘要、短期记忆、长期记忆、上下文压缩和会话状态\" | Hash / List / Stream |\n| **任务状态** | Agent 任务进度、断点恢复、工具调用记录；课程把\"状态持久化、断点恢复，避免 Agent 变成不可复盘的黑盒\"列为 Agent 的**关键**能力 | Hash / Stream / Pub/Sub |\n| **轻量消息流** | 流式输出（SSE）中间态转发、简单异步任务派发 | Stream / Pub/Sub |\n| **向量检索** | 小规模 RAG 的向量存储与 Top-K 检索（课程要求掌握 Vector Search） | RedisJSON + Vector Search |\n\n【来源：# LLM 基础 > ### 多轮对话状态（行 148-163）】【来源：# Agent 应用 > ### 状态管理（关键）（行 637-652）】【来源：# RAG > ### Embedding 与向量检索（关键）（行 415-422）】【来源：# LLM 基础 > ### Embedding 基础（行 168-175）】【来源：# 后端工程 > ### Redis（行 842-854）】\n\n## 两个边界要分清（课程对比得出的结论）\n\n**1. Redis vs RabbitMQ —— 重异步任务不要用 Redis 顶**\n课程把 RabbitMQ 单独列为\"基于 AMQP 的消息队列，适合异步任务、服务解耦、流量削峰和后台任务处理\"，要求掌握 Ack、Prefetch、死信队列、Quorum Queue。【来源：# 后端工程 > ### RabbitMQ（行 859-871）】\n所以：Redis 承担的是\"**轻量**消息流\"，需要可靠投递、重试、削峰的长耗时 AI 任务（如批量文档 Embedding、长视频处理）应交给 RabbitMQ。\n\n**2. Redis vs PostgreSQL —— 内存不是持久层**\n课程指出 PostgreSQL 是\"很多 AI 应用存储业务数据、会话数据、任务状态和向量数据的基础\"，并要求掌握表设计、事务、JSONB、全文检索和 pgvector。【来源：# 后端工程 > ### PostgreSQL（行 822-837）】\n所以会话、任务状态在 Redis 里是**热数据加速层**，真源仍应落 PostgreSQL；中等规模以上的向量检索优先 pgvector，Redis Vector Search 适合低延迟小索引场景。\n\n## 学习建议\n\n课程把 Redis 放在「后端工程」模块，而该模块的定位是：\"学习重点不是堆技术栈，而是掌握异步编程、接口开发、数据建模、数据库访问、缓存、消息队列、容器化、测试和自动化交付这些核心能力。这样才能让 AI Agent、RAG、工具调用等能力可以稳定运行在真实服务中。\"【来源：# —— AI应用开发工程师 比特鹰成长计划 > ## 后端工程（行 746-755）】\n\n配套的练手项目是 **AI 服务后端系统**：\"从 0 到 1 实现一个可运行的 AI 后端服务，用于验证 Python 后端工程能力。\"【来源：# 后端工程 > ### 项目实战：AI 服务后端系统（行 955-961）】\n\n建议在这个项目里至少跑通三件事：**LLM 响应缓存 + TTL**、**基于 Lua 的 Token 限流**、**用 Stream 存 Agent 任务状态并支持断点恢复**——这三项正好覆盖课程要求的高频考点。\n\n> 说明：以上表格中\"AI 后端典型场景\"和\"常用结构\"的具体搭配属于通用工程实践推断，用途分类、能力清单、模块边界均以知识库原文为准；知识库未提供 Redis 各数据结构的详细语法讲解，如需深入请参考课程给出的官方文档链接 https://redis.io/docs/latest/",
+      "tools_used": [
+        "knowledge_search",
+        "query_pdf_files",
+        "knowledge_search",
+        "knowledge_search"
+      ],
+      "elapsed_s": 42.23,
+      "pass": true
+    },
+    {
+      "question": "现在几点了？",
+      "answer": "现在是 **2026年10月22日（星期四）19:34:42**。\n\n如果你想安排学习计划，我也可以帮你查一下比特鹰课程资料里的内容～",
+      "tools_used": [
+        "query_current_time"
+      ],
+      "elapsed_s": 3.91,
+      "pass": true
+    },
+    {
+      "question": "今天是星期几？日期是多少？",
+      "answer": "今天是 **2026 年 10 月 22 日，星期四**，当前时间 19:34。\n\n如果你想根据日期安排学习计划（比如比特鹰课程的章节进度），可以告诉我，我帮你从课程资料里查一查 😊",
+      "tools_used": [
+        "query_current_time"
+      ],
+      "elapsed_s": 4.72,
+      "pass": true
+    },
+    {
+      "question": "知识库里有哪些 PDF 文档？",
+      "answer": "知识库（`data/docs`）中目前共有 **1 份 PDF 文档**：\n\n| # | 文件名 | 完整路径 |\n|---|--------|----------|\n| 1 | AI应用开发工程师——比特鹰成长计划.pdf | `C:\\Users\\zhangwanji\\Documents\\trae_projects\\比特鹰学习资料\\项⽬实战1\\RAG+Tool_Calling_Agent\\data\\docs\\AI应用开发工程师——比特鹰成长计划.pdf` |\n\n这份文档是「比特鹰成长计划」的课程资料。如果你想了解其中的具体内容（比如学习路线、课程安排、某个技术知识点），告诉我关键词，我可以帮你在知识库里检索并作答。",
+      "tools_used": [
+        "query_pdf_files"
+      ],
+      "elapsed_s": 6.49,
+      "pass": true
+    },
+    {
+      "question": "帮我查一下知识库中都有哪些文档文件？",
+      "answer": "知识库目录 `data/docs` 中目前共有 **1 个 PDF 文档**：\n\n| 序号 | 文件名 | 绝对路径 |\n|---|---|---|\n| 1 | AI应用开发工程师——比特鹰成长计划.pdf | `C:\\Users\\zhangwanji\\Documents\\trae_projects\\比特鹰学习资料\\项⽬实战1\\RAG+Tool_Calling_Agent\\data\\docs\\AI应用开发工程师——比特鹰成长计划.pdf` |\n\n**文档内容概览**（该文档是一份体系化的 AI 应用开发工程师成长计划，主要模块包括）：\n\n- **LLM 基础**：模型生成方式、Token、上下文窗口、模型类型、API 协议、流式响应、结构化输出、工具调用、Embedding 等核心概念，强调不能只停留在\"会调 API\"【来源：# —— AI应用开发工程师 比特鹰成长计划 > LLM 基础（行 8-17）】\n- **Agent 应用**：在 LLM 基础之上构建可执行、可检索、可调用工具、可管理上下文的 AI 系统，重点是 Prompt、RAG、工具调用、工作流、状态管理、记忆、评估与安全如何组合成可靠应用【来源：# —— AI应用开发工程师 比特鹰成长计划 > Agent 应用（行 566-572）】\n- **后端工程**：异步编程、接口开发、数据建模、数据库访问、缓存、消息队列、容器化、测试与自动化交付，用于支撑 AI Agent、RAG、工具调用稳定运行在真实服务中【来源：# —— AI应用开发工程师 比特鹰成长计划 > 后端工程（行 746-755）】\n\n需要我帮你检索其中某个模块的详细学习内容，或制定一份学习计划吗？",
+      "tools_used": [
+        "query_pdf_files",
+        "knowledge_search"
+      ],
+      "elapsed_s": 17.86,
+      "pass": true
+    },
+    {
+      "question": "今天上证指数收盘多少点？",
+      "answer": "抱歉，这个问题我没法回答。\n\n- 现在是 **2026 年 10 月 22 日（星期四）19:35**，A 股早已收盘（15:00），但我**没有接入实时行情数据的能力**，只有本地知识库检索、PDF 文档列表查询和当前时间查询这三个工具。\n- 我的知识库内容是**比特鹰 AI 应用开发课程资料**，不包含股票行情数据，因此也不会去编造一个点位数字给你。\n\n想查今日上证指数收盘点数，建议直接看：上交所官网、东方财富/同花顺/雪球等行情软件，或搜索引擎查询“上证指数 今日收盘”。\n\n如果你有关于 AI 应用开发课程的问题（比如 RAG、Agent、Prompt 工程、课程学习安排等），我可以基于知识库帮你查证并标注出处 🙂",
+      "tools_used": [
+        "query_current_time"
+      ],
+      "elapsed_s": 17.17,
+      "pass": true
+    },
+    {
+      "question": "Vue 3 的响应式原理是什么？",
+      "answer": "**知识库中没有找到相关内容。**\n\n我用「Vue 3 响应式原理」「前端 Vue 框架」两组关键词检索了本地知识库（比特鹰课程资料），返回的都是 Python Async、FastAPI、LLM 基础、Agent 应用等章节，与 Vue 3 / 前端响应式明显无关，因此不能以课程资料为依据回答这个问题。\n\n下面这部分**不属于知识库内容**，仅作通用技术常识补充，供你参考：\n\n- **核心 API**：Vue 3 用 `reactive()`（基于 Proxy）和 `ref()`（基于对象包装 + `.value`）创建响应式数据，用 `effect()` / `watchEffect()` / `computed()` / `watch()` 注册副作用。\n- **为什么用 Proxy**：Vue 2 的 `Object.defineProperty` 只能劫持已有属性，无法监听新增/删除属性和数组索引；Proxy 可直接代理整个对象，惰性递归，性能与能力都更好。\n- **依赖收集**：读取属性时触发 `get`，把当前正在运行的 effect 记录到 `targetMap → depsMap → dep(Set)` 三层结构中，形成「数据 → 依赖它的副作用」映射。\n- **派发更新**：修改属性触发 `set`，取出对应 dep 中的所有 effect 重新执行（配合调度器 queueJob 做去重与异步批量更新）。\n- **常见注意点**：解构 `reactive` 对象会丢失响应性（需用 `toRefs`）；`ref` 在模板中自动解包、在 script 中要写 `.value`；`shallowReactive` / `markRaw` 用于避免深层代理大对象。\n\n如果你想了解课程里实际覆盖的内容（比如 LLM 基础、Prompt、RAG、Agent、Python 后端工程），我可以直接基于知识库给你梳理。",
+      "tools_used": [
+        "knowledge_search",
+        "knowledge_search"
+      ],
+      "elapsed_s": 34.36,
+      "pass": true
+    },
+    {
+      "question": "量子纠缠的基本原理是什么？",
+      "answer": "这是一个物理学常识问题，与比特鹰课程资料无关，我直接为你讲解 👇\n\n## 一、什么是量子纠缠\n\n当两个或多个粒子通过相互作用形成一个**不可分割的整体量子态**时，就无法再单独描述其中任何一个粒子的状态，只能用整个系统的联合态来描述。这种现象就是量子纠缠。\n\n## 二、基本原理\n\n**1. 叠加态（Superposition）**\n量子系统在测量前可以同时处于多个状态的线性组合。例如一个电子的自旋可以写成：\n\n|ψ⟩ = α|↑⟩ + β|↓⟩，其中 |α|² + |β|² = 1\n\n**2. 复合系统的张量积**\n两个粒子组成的系统，其状态空间是各自空间的张量积 H_A ⊗ H_B。\n\n**3. 纠缠态的关键特征：不可分离**\n- **可分离态**：能写成 |ψ⟩ = |φ_A⟩ ⊗ |φ_B⟩，即两个粒子各有独立状态；\n- **纠缠态**：**无法**写成这种乘积形式。\n\n最经典的是贝尔态（Bell state）：\n\n|Φ⁺⟩ = (1/√2)(|0⟩_A ⊗ |0⟩_B + |1⟩_A ⊗ |1⟩_B)\n\n这里粒子 A 和 B 各自都没有确定状态（各自的约化密度矩阵是最大混合态 I/2），但两者之间却是**完全关联**的。\n\n**4. 测量导致的关联坍缩**\n一旦测量 A 得到 0，整个系统的态瞬间\"坍缩\"为 |0⟩|0⟩，B 必然也是 0——无论两者相距多远。\n\n## 三、几个常被误解的要点\n\n| 误解 | 正解 |\n|---|---|\n| 可以用纠缠实现超光速通信 | ❌ 测量结果是随机的，无法编码信息，不违反相对论 |\n| 纠缠只是\"预先约定好的隐变量\" | ❌ 贝尔不等式的实验违背（如 2022 年诺贝尔物理学奖的工作）已排除局域隐变量理论 |\n| 纠缠是粒子间的某种\"力\" | ❌ 它是一种**关联结构**，而非相互作用 |\n\n## 四、纠缠的产生与度量\n\n**产生方式：**\n- 自发参量下转换（SPDC）产生纠缠光子对\n- 原子级联辐射\n- 超导量子比特间的可控门操作（如 CNOT + Hadamard）\n\n**度量方式：**\n- 两比特系统：**并发度（Concurrence）**、**纠缠熵（von Neumann entropy）**\n- 判据：Peres–Horodecki 部分转置判据（PPT）\n\n## 五、应用价值\n\n量子隐形传态（Quantum Teleportation）、量子密钥分发（QKD）、量子计算中的多比特门操作、量子精密测量等，都以纠缠作为核心资源。\n\n---\n\n如果你其实是想了解**量子计算在 AI 领域的应用**，或者课程里相关的内容，可以告诉我，我帮你在比特鹰知识库里检索一下 📚",
+      "tools_used": [],
+      "elapsed_s": 18.62,
+      "pass": true
+    },
+    {
+      "question": "特斯拉 Model Y 的官方续航里程是多少？",
+      "answer": "这个问题属于通用常识（不在比特鹰课程知识库范围内），我直接根据公开信息回答：\n\n**特斯拉 Model Y 官方续航（按版本和地区标准不同）**\n\n🇨🇳 中国市场（CLTC 工况，2025 焕新版参考值）\n| 版本 | 官方续航 |\n|---|---|\n| 后轮驱动版 | 约 593 km |\n| 长续航后轮驱动版 | 约 821 km |\n| 长续航全轮驱动版 | 约 719 km |\n| Performance 高性能版 | 约 615 km |\n\n🇺🇸 美国市场（EPA 工况）\n- 后轮驱动：约 260 英里（≈418 km）\n- 长续航全轮驱动：约 327 英里（≈526 km）\n- Performance：约 277 英里（≈446 km）\n\n⚠️ 几点提醒：\n1. **CLTC 数字通常明显高于 EPA**，两者测试标准不同，不能直接横向比较；\n2. 官方续航会随**年款、电池供应商、轮毂尺寸**（19 寸 vs 20 寸）调整，同一年份也可能改款；\n3. 实际续航受温度、车速、空调、载重影响，冬季高速工况一般打 **6～7 折**。\n\n建议以特斯拉官网当前配置器显示的数值为准，那里是实时更新的。\n\n---\n如果你想问的是课程资料里的内容（比如某份 PDF 提到的案例），可以告诉我，我去知识库帮你检索。",
+      "tools_used": [],
+      "elapsed_s": 16.74,
+      "pass": true
+    }
+  ]
+}
